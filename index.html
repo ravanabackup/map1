@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Offline-capable GPS trip tracker with AMOLED UI, speed sound, wake lock, and black-box export." />
+  <title>BlackBox — Trip Tracker</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN2GOwo=" crossorigin=""></script>
+
+  <style>
+    /* ─── RESET & BASE ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #000000;
+      --surface:   #0a0a0a;
+      --card:      #111111;
+      --border:    #1e1e1e;
+      --accent:    #00e5ff;
+      --accent2:   #76ff03;
+      --warn:      #ff6d00;
+      --stop:      #ff1744;
+      --text:      #ffffff;
+      --muted:     #888888;
+      --font-mono: 'Courier New', Courier, monospace;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ─── LAYOUT ───────────────────────────────────────────────────────────── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh; /* dynamic viewport height — fixes mobile browser chrome */
+      width: 100%;
+    }
+
+    /* ─── TOP BAR ──────────────────────────────────────────────────────────── */
+    #topbar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+      z-index: 1000;
+    }
+
+    #topbar .logo {
+      font-size: 11px;
+      letter-spacing: 3px;
+      color: var(--accent);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    #status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    #status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.4s;
+      flex-shrink: 0;
+    }
+    #status-dot.active  { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); animation: pulse 1.4s infinite; }
+    #status-dot.stopped { background: var(--stop);    box-shadow: 0 0 8px var(--stop); }
+    #status-dot.idle    { background: var(--warn);    box-shadow: 0 0 8px var(--warn); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.35; }
+    }
+
+    /* ─── MAIN CONTENT ─────────────────────────────────────────────────────── */
+    #content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ─── SPEEDOMETER PANEL ─────────────────────────────────────────────────── */
+    #speedo-panel {
+      flex-shrink: 0;
+      background: var(--bg);
+      padding: 10px 16px 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #speedo-wrap {
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 0;
+    }
+
+    #speedo-value {
+      font-size: clamp(64px, 18vw, 130px);
+      font-weight: 900;
+      font-family: var(--font-mono);
+      color: var(--accent);
+      line-height: 1;
+      letter-spacing: -4px;
+      text-shadow:
+        0 0 20px rgba(0,229,255,0.6),
+        0 0 60px rgba(0,229,255,0.2);
+      transition: color 0.3s, text-shadow 0.3s;
+      min-width: 3ch;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #speedo-value.speeding {
+      color: var(--stop);
+      text-shadow: 0 0 20px rgba(255,23,68,0.7), 0 0 60px rgba(255,23,68,0.3);
+    }
+    #speedo-value.fast {
+      color: var(--warn);
+      text-shadow: 0 0 20px rgba(255,109,0,0.6), 0 0 60px rgba(255,109,0,0.25);
+    }
+
+    #speedo-unit {
+      font-size: 16px;
+      color: var(--muted);
+      margin-bottom: 14px;
+      margin-left: 6px;
+      letter-spacing: 2px;
+    }
+
+    /* Arc gauge */
+    #gauge-svg {
+      position: absolute;
+      bottom: -6px;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+
+    /* Stats row */
+    #stats-row {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 480px;
+      padding: 6px 0 2px;
+      gap: 4px;
+    }
+
+    .stat-box {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 3px;
+      min-width: 0;
+    }
+
+    .stat-label {
+      font-size: 7px;
+      letter-spacing: 1px;
+      color: var(--muted);
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    .stat-val {
+      font-size: 14px;
+      font-weight: bold;
+      color: var(--text);
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .stat-val.green  { color: var(--accent2); }
+    .stat-val.cyan   { color: var(--accent); }
+    .stat-val.red    { color: var(--stop); }
+    .stat-val.orange { color: var(--warn); }
+
+    /* ─── MAP ──────────────────────────────────────────────────────────────── */
+    #map {
+      flex: 1;
+      background: #0b0b0b;
+      min-height: 0;
+    }
+
+    /* Dark-mode tile filter */
+    .leaflet-tile {
+      filter: brightness(0.72) saturate(0.6) hue-rotate(180deg) invert(1);
+    }
+
+    /* ─── BOTTOM CONTROLS ───────────────────────────────────────────────────── */
+    #controls {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 10px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 9px 13px;
+      cursor: pointer;
+      background: var(--card);
+      color: var(--muted);
+      transition: all 0.2s;
+      white-space: nowrap;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    .btn:active { transform: scale(0.95); }
+
+    #btn-start {
+      border-color: var(--accent2);
+      color: var(--accent2);
+      font-size: 12px;
+      padding: 10px 20px;
+      letter-spacing: 1.5px;
+    }
+    #btn-start:hover { background: rgba(118,255,3,0.08); }
+    #btn-start.running {
+      border-color: var(--stop);
+      color: var(--stop);
+    }
+    #btn-start.running:hover { background: rgba(255,23,68,0.08); }
+
+    #btn-export { border-color: var(--accent); color: var(--accent); }
+    #btn-export:hover { background: rgba(0,229,255,0.08); }
+    #btn-export:disabled { opacity: 0.25; cursor: not-allowed; pointer-events: none; }
+
+    #btn-sound.on { border-color: var(--warn); color: var(--warn); }
+
+    #btn-center:hover { border-color: var(--accent); color: var(--accent); }
+
+    #btn-clear { font-size: 10px; }
+    #btn-clear:hover { border-color: var(--stop); color: var(--stop); }
+
+    /* ─── LOG DRAWER TOGGLE ─────────────────────────────────────────────────── */
+    #log-toggle-btn {
+      position: fixed;
+      right: 12px;
+      bottom: 76px;
+      z-index: 2000;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      cursor: pointer;
+      color: var(--muted);
+      transition: all 0.2s;
+      touch-action: manipulation;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+    }
+    #log-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+    #log-toggle-btn.has-events { border-color: var(--accent); }
+
+    /* ─── LOG DRAWER ────────────────────────────────────────────────────────── */
+    #log-drawer {
+      position: fixed;
+      right: 0; bottom: 0;
+      width: min(380px, 100vw);
+      height: 55vh;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-left: 1px solid var(--border);
+      border-radius: 12px 0 0 0;
+      z-index: 1999;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+      overflow: hidden;
+    }
+    #log-drawer.open { transform: translateX(0); }
+
+    #log-header {
+      padding: 12px 16px;
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: var(--accent);
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    #log-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+      font-size: 10px;
+      line-height: 1.7;
+      overscroll-behavior: contain;
+    }
+    #log-list::-webkit-scrollbar { width: 3px; }
+    #log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .log-entry {
+      padding: 4px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .log-entry .log-time { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+    .log-entry .log-msg  { color: var(--text); word-break: break-word; }
+    .log-entry.ev-stop   .log-msg { color: var(--stop); }
+    .log-entry.ev-resume .log-msg { color: var(--accent2); }
+    .log-entry.ev-start  .log-msg { color: var(--accent); }
+    .log-entry.ev-end    .log-msg { color: var(--warn); }
+    .log-entry.ev-ping   .log-msg { color: var(--muted); }
+
+    #log-count { font-size: 10px; color: var(--muted); }
+
+    /* ─── WAKE LOCK BADGE ───────────────────────────────────────────────────── */
+    #wakelock-badge {
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--muted);
+      opacity: 0;
+      transition: opacity 0.4s;
+      white-space: nowrap;
+    }
+    #wakelock-badge.active {
+      opacity: 1;
+      color: var(--accent2);
+    }
+
+    /* ─── ACCURACY LABEL ────────────────────────────────────────────────────── */
+    .accuracy-label {
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+
+    /* ─── NOTIFICATIONS ─────────────────────────────────────────────────────── */
+    #notif-area {
+      position: fixed;
+      top: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+      width: 90vw;
+      max-width: 360px;
+    }
+
+    .notif {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      color: var(--text);
+      animation: slideIn 0.25s ease, fadeOut 0.5s ease 2.5s forwards;
+    }
+    .notif.error  { border-color: var(--stop);   color: var(--stop); }
+    .notif.info   { border-color: var(--accent);  color: var(--accent); }
+    .notif.ok     { border-color: var(--accent2); color: var(--accent2); }
+
+    @keyframes slideIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes fadeOut { from { opacity:1; } to { opacity:0; } }
+
+    /* ─── LEAFLET DARK OVERRIDES ────────────────────────────────────────────── */
+    .leaflet-popup-content-wrapper {
+      background: var(--card) !important;
+      color: var(--text) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 6px !important;
+      font-family: var(--font-mono) !important;
+      font-size: 11px !important;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.8) !important;
+    }
+    .leaflet-popup-tip           { background: var(--card) !important; }
+    .leaflet-popup-close-button  { color: var(--muted) !important; }
+    .leaflet-control-zoom a {
+      background: var(--card) !important;
+      color: var(--text) !important;
+      border-color: var(--border) !important;
+    }
+    .leaflet-control-attribution {
+      background: rgba(0,0,0,0.7) !important;
+      color: var(--muted) !important;
+      font-size: 8px !important;
+    }
+    .leaflet-control-attribution a { color: var(--muted) !important; }
+  </style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── TOP BAR ── -->
+  <div id="topbar">
+    <span class="logo">⬛ BlackBox</span>
+    <div id="status-pill">
+      <div id="status-dot"></div>
+      <span id="status-text">IDLE</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span id="wakelock-badge">🔆 AWAKE</span>
+      <span class="accuracy-label" id="acc-label">GPS: —</span>
+    </div>
+  </div>
+
+  <!-- ── MAIN ── -->
+  <div id="content">
+
+    <!-- Speedometer panel -->
+    <div id="speedo-panel">
+      <div id="speedo-wrap">
+        <div id="speedo-value">0</div>
+        <div id="speedo-unit">km/h</div>
+        <!-- Arc gauge SVG -->
+        <svg id="gauge-svg" width="260" height="30" viewBox="0 0 260 30" aria-hidden="true">
+          <path d="M 10 28 Q 130 -10 250 28"
+                fill="none" stroke="#1e1e1e" stroke-width="3" stroke-linecap="round"/>
+          <path id="gauge-arc" d="M 10 28 Q 130 -10 250 28"
+                fill="none" stroke="#00e5ff" stroke-width="3"
+                stroke-linecap="round" stroke-dasharray="0 300"
+                style="transition:stroke-dasharray 0.5s ease,stroke 0.3s;"/>
+        </svg>
+      </div>
+      <div id="stats-row">
+        <div class="stat-box">
+          <span class="stat-label">MAX&nbsp;km/h</span>
+          <span class="stat-val orange" id="stat-max">0</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">AVG&nbsp;km/h</span>
+          <span class="stat-val cyan" id="stat-avg">0</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">DIST</span>
+          <span class="stat-val green" id="stat-dist">0.00km</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">TIME</span>
+          <span class="stat-val" id="stat-dur">00:00:00</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">STOPS</span>
+          <span class="stat-val red" id="stat-stops">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div id="map"></div>
+  </div>
+
+  <!-- ── BOTTOM CONTROLS ── -->
+  <div id="controls">
+    <button class="btn" id="btn-start"  onclick="toggleTracking()">▶ START</button>
+    <button class="btn" id="btn-sound"  onclick="toggleSound()"   title="Toggle speed sound">🔇 SOUND</button>
+    <button class="btn" id="btn-center" onclick="centerMap()"     title="Center on location">⊕ CTR</button>
+    <button class="btn" id="btn-export" onclick="exportLog()"     disabled title="Export black-box log">⬇ EXPORT</button>
+    <button class="btn" id="btn-clear"  onclick="clearTrip()"     title="Clear trip">✕ CLR</button>
+  </div>
+</div>
+
+<!-- Log drawer toggle button -->
+<div id="log-toggle-btn" onclick="toggleLogDrawer()" title="Event log (L)">📋</div>
+
+<!-- Log drawer -->
+<div id="log-drawer">
+  <div id="log-header">
+    <span>▸ Event Log</span>
+    <span id="log-count">0 events</span>
+  </div>
+  <div id="log-list"></div>
+</div>
+
+<!-- Notifications -->
+<div id="notif-area"></div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════════════ */
+const state = {
+  tracking:      false,
+  watchId:       null,
+  wakeLock:      null,
+  soundOn:       false,
+  logDrawerOpen: false,
+
+  /* trip data */
+  logs:          [],
+  coords:        [],      // [[lat,lng], …]
+  totalDist:     0,       // km
+  maxSpeed:      0,       // km/h
+  speedSum:      0,
+  speedCount:    0,
+  stopCount:     0,
+  tripStart:     null,
+  lastCoord:     null,    // {lat, lng}
+  lastLogTime:   0,       // ms — last 60-second ping
+  lastSpeed:     0,       // km/h
+  isStopped:     false,
+  timerInterval: null,
+  durationSecs:  0,
+
+  /* audio */
+  audioCtx:      null,
+  tickTimeout:   null,
+};
+
+/* ═══════════════════════════════════════════════════════════════════
+   MAP
+═══════════════════════════════════════════════════════════════════ */
+const map = L.map('map', {
+  center: [20, 0],
+  zoom: 3,
+  zoomControl: true,
+  attributionControl: true,
+});
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+
+const routeLine = L.polyline([], {
+  color: '#00e5ff',
+  weight: 3.5,
+  opacity: 0.85,
+  lineJoin: 'round',
+  lineCap: 'round',
+}).addTo(map);
+
+const posIcon = L.divIcon({
+  className: '',
+  html: `<div style="width:16px;height:16px;border-radius:50%;
+    background:#00e5ff;border:2px solid #fff;
+    box-shadow:0 0 12px rgba(0,229,255,0.9);
+    display:flex;align-items:center;justify-content:center;">
+    <div style="width:5px;height:5px;border-radius:50%;background:#fff;"></div>
+  </div>`,
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
+
+let posMarker  = null;
+let stopMarkers = [];
+
+/* ═══════════════════════════════════════════════════════════════════
+   HAVERSINE  (returns km)
+═══════════════════════════════════════════════════════════════════ */
+function haversine(lat1, lng1, lat2, lng2) {
+  const R    = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a    = Math.sin(dLat / 2) ** 2
+             + Math.cos(lat1 * Math.PI / 180)
+             * Math.cos(lat2 * Math.PI / 180)
+             * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   GEOLOCATION HANDLER
+═══════════════════════════════════════════════════════════════════ */
+function onPosition(pos) {
+  const { latitude: lat, longitude: lng, speed, accuracy } = pos.coords;
+  const now = Date.now();
+
+  // Speed: GPS gives m/s; convert to km/h
+  const speedKmh = (speed != null && speed >= 0)
+    ? parseFloat((speed * 3.6).toFixed(1))
+    : 0;
+
+  updateSpeedometer(speedKmh);
+  updateAccuracyLabel(accuracy);
+  updatePositionMarker(lat, lng);
+
+  // Extend route polyline
+  state.coords.push([lat, lng]);
+  routeLine.setLatLngs(state.coords);
+
+  // Accumulate distance
+  if (state.lastCoord) {
+    state.totalDist += haversine(state.lastCoord.lat, state.lastCoord.lng, lat, lng);
+    updateStatDist();
+  }
+  state.lastCoord = { lat, lng };
+
+  // Max speed
+  if (speedKmh > state.maxSpeed) {
+    state.maxSpeed = speedKmh;
+    document.getElementById('stat-max').textContent = speedKmh.toFixed(0);
+  }
+
+  // Running average (only moving readings)
+  if (speedKmh > 0) {
+    state.speedSum   += speedKmh;
+    state.speedCount += 1;
+    document.getElementById('stat-avg').textContent =
+      (state.speedSum / state.speedCount).toFixed(0);
+  }
+
+  /* ── IDLE DETECTION ─────────────────────────────────────────── */
+  if (speedKmh === 0 && !state.isStopped) {
+    state.isStopped  = true;
+    state.stopCount += 1;
+    document.getElementById('stat-stops').textContent = state.stopCount;
+    setStatusDot('stopped');
+    pushLog({ type: 'stop', lat, lng, speed: 0,
+              note: `Stop #${state.stopCount} — vehicle idle` });
+    addStopMarker(lat, lng, state.stopCount);
+    notify('🛑 Stopped', 'error');
+  }
+
+  if (speedKmh > 0 && state.isStopped) {
+    state.isStopped = false;
+    setStatusDot('active');
+    pushLog({ type: 'resume', lat, lng, speed: speedKmh,
+              note: `Resumed — ${speedKmh} km/h` });
+    notify('▶ Resumed', 'ok');
+  }
+
+  /* ── 60-SECOND PING ─────────────────────────────────────────── */
+  if (now - state.lastLogTime >= 60_000) {
+    state.lastLogTime = now;
+    if (!state.isStopped) {
+      pushLog({ type: 'ping', lat, lng, speed: speedKmh,
+                note: `Moving @ ${speedKmh} km/h · odometer ${state.totalDist.toFixed(2)} km` });
+    }
+  }
+
+  state.lastSpeed = speedKmh;
+
+  if (state.soundOn) updateSoundSpeed(speedKmh);
+}
+
+function onGeoError(err) {
+  console.warn('GPS error:', err.message);
+  notify('GPS: ' + err.message, 'error');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LOG SYSTEM
+═══════════════════════════════════════════════════════════════════ */
+function pushLog(entry) {
+  const ts  = new Date();
+  const log = {
+    type:  entry.type,
+    ts,
+    tsStr: ts.toLocaleTimeString('en-GB', { hour12: false }),
+    lat:   entry.lat,
+    lng:   entry.lng,
+    speed: entry.speed,
+    dist:  state.totalDist,
+    note:  entry.note,
+    idx:   state.logs.length + 1,
+  };
+  state.logs.push(log);
+  renderLogEntry(log);
+  document.getElementById('log-count').textContent = state.logs.length + ' events';
+  document.getElementById('btn-export').disabled   = false;
+  document.getElementById('log-toggle-btn').classList.add('has-events');
+}
+
+function renderLogEntry(log) {
+  const list = document.getElementById('log-list');
+  const div  = document.createElement('div');
+  div.className = 'log-entry ev-' + log.type;
+  div.innerHTML = '<span class="log-time">' + log.tsStr + '</span>'
+                + '<span class="log-msg">'  + escHtml(log.note) + '</span>';
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UI HELPERS
+═══════════════════════════════════════════════════════════════════ */
+function updateSpeedometer(kmh) {
+  const el = document.getElementById('speedo-value');
+  el.textContent = Math.round(kmh);
+  el.classList.remove('speeding', 'fast');
+  if      (kmh >= 100) el.classList.add('speeding');
+  else if (kmh >=  60) el.classList.add('fast');
+
+  const pct    = Math.min(kmh / 160, 1);
+  const filled = pct * 300;
+  const arc    = document.getElementById('gauge-arc');
+  arc.style.strokeDasharray = filled + ' ' + (301 - filled);
+  arc.style.stroke = kmh >= 100 ? '#ff1744' : kmh >= 60 ? '#ff6d00' : '#00e5ff';
+}
+
+function updateStatDist() {
+  const d = state.totalDist;
+  document.getElementById('stat-dist').textContent =
+    d >= 1 ? d.toFixed(2) + 'km' : (d * 1000).toFixed(0) + 'm';
+}
+
+function updateAccuracyLabel(acc) {
+  document.getElementById('acc-label').textContent =
+    acc != null ? 'GPS: \u00b1' + Math.round(acc) + 'm' : 'GPS: \u2014';
+}
+
+function updatePositionMarker(lat, lng) {
+  if (!posMarker) {
+    posMarker = L.marker([lat, lng], { icon: posIcon, zIndexOffset: 1000 }).addTo(map);
+  } else {
+    posMarker.setLatLng([lat, lng]);
+  }
+}
+
+function addStopMarker(lat, lng, idx) {
+  const icon = L.divIcon({
+    className: '',
+    html: '<div style="width:20px;height:20px;border-radius:50%;'
+        + 'background:#ff1744;border:2px solid #fff;'
+        + 'display:flex;align-items:center;justify-content:center;'
+        + 'font-size:9px;font-weight:bold;color:#fff;font-family:monospace;'
+        + 'box-shadow:0 0 10px rgba(255,23,68,0.8);">' + idx + '</div>',
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+  const m = L.marker([lat, lng], { icon }).addTo(map);
+  m.bindPopup('<b>STOP #' + idx + '</b><br>' + new Date().toLocaleTimeString());
+  stopMarkers.push(m);
+}
+
+function setStatusDot(cls) {
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  dot.className = cls ? cls : '';
+  txt.textContent = cls ? cls.toUpperCase() : 'IDLE';
+}
+
+function centerMap() {
+  if (state.lastCoord) {
+    map.flyTo([state.lastCoord.lat, state.lastCoord.lng], 16, { duration: 1.2 });
+  } else {
+    notify('No position yet', 'error');
+  }
+}
+
+function toggleLogDrawer() {
+  state.logDrawerOpen = !state.logDrawerOpen;
+  document.getElementById('log-drawer')
+    .classList.toggle('open', state.logDrawerOpen);
+}
+
+function notify(msg, type) {
+  type = type || 'info';
+  const area = document.getElementById('notif-area');
+  const n    = document.createElement('div');
+  n.className   = 'notif ' + type;
+  n.textContent = msg;
+  area.appendChild(n);
+  setTimeout(function() { if (n.parentNode) n.parentNode.removeChild(n); }, 3200);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TRACKING
+═══════════════════════════════════════════════════════════════════ */
+function toggleTracking() {
+  state.tracking ? stopTracking() : startTracking();
+}
+
+async function startTracking() {
+  if (!('geolocation' in navigator)) {
+    notify('Geolocation not supported in this browser', 'error');
+    return;
+  }
+
+  await requestWakeLock();
+  initAudio();
+
+  state.tracking    = true;
+  state.tripStart   = new Date();
+  state.lastLogTime = Date.now() - 55_000; // first ping in ~5s
+
+  const btn = document.getElementById('btn-start');
+  btn.textContent = '\u23F9 STOP';
+  btn.classList.add('running');
+  setStatusDot('active');
+
+  pushLog({ type: 'start', lat: 0, lng: 0, speed: 0,
+            note: 'Trip started at ' + state.tripStart.toLocaleTimeString() });
+
+  state.durationSecs = 0;
+  state.timerInterval = setInterval(tickDuration, 1000);
+
+  state.watchId = navigator.geolocation.watchPosition(onPosition, onGeoError, {
+    enableHighAccuracy: true,
+    maximumAge: 2000,
+    timeout: 15000,
+  });
+
+  notify('▶ Tracking started', 'ok');
+}
+
+function stopTracking() {
+  state.tracking = false;
+
+  if (state.watchId != null) {
+    navigator.geolocation.clearWatch(state.watchId);
+    state.watchId = null;
+  }
+
+  clearInterval(state.timerInterval);
+  state.timerInterval = null;
+
+  releaseWakeLock();
+  stopSoundLoop();
+
+  const btn = document.getElementById('btn-start');
+  btn.textContent = '\u25B6 START';
+  btn.classList.remove('running');
+  setStatusDot('idle');
+
+  const dur  = document.getElementById('stat-dur').textContent;
+  const dist = state.totalDist.toFixed(2);
+  pushLog({ type: 'end',
+            lat:   state.lastCoord ? state.lastCoord.lat : 0,
+            lng:   state.lastCoord ? state.lastCoord.lng : 0,
+            speed: 0,
+            note:  'Trip ended · ' + dist + ' km · ' + dur });
+
+  notify('\u23F9 Tracking stopped', 'info');
+}
+
+function tickDuration() {
+  state.durationSecs++;
+  const h = Math.floor(state.durationSecs / 3600);
+  const m = Math.floor((state.durationSecs % 3600) / 60);
+  const s = state.durationSecs % 60;
+  document.getElementById('stat-dur').textContent =
+    pad2(h) + ':' + pad2(m) + ':' + pad2(s);
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   CLEAR TRIP
+═══════════════════════════════════════════════════════════════════ */
+function clearTrip() {
+  if (state.tracking) { notify('Stop tracking first', 'error'); return; }
+  if (!confirm('Clear all trip data?')) return;
+
+  Object.assign(state, {
+    logs: [], coords: [], totalDist: 0, maxSpeed: 0,
+    speedSum: 0, speedCount: 0, stopCount: 0,
+    tripStart: null, lastCoord: null, isStopped: false, durationSecs: 0,
+  });
+
+  routeLine.setLatLngs([]);
+  if (posMarker) { map.removeLayer(posMarker); posMarker = null; }
+  stopMarkers.forEach(m => map.removeLayer(m));
+  stopMarkers = [];
+
+  ['speedo-value','stat-max','stat-avg','stat-stops']
+    .forEach(id => { document.getElementById(id).textContent = '0'; });
+  document.getElementById('stat-dist').textContent = '0.00km';
+  document.getElementById('stat-dur').textContent  = '00:00:00';
+  document.getElementById('log-list').innerHTML    = '';
+  document.getElementById('log-count').textContent = '0 events';
+  document.getElementById('btn-export').disabled   = true;
+  document.getElementById('log-toggle-btn').classList.remove('has-events');
+  document.getElementById('gauge-arc').style.strokeDasharray = '0 300';
+  setStatusDot('');
+
+  notify('Trip data cleared', 'info');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   EXPORT  —  BLACK BOX  .TXT
+═══════════════════════════════════════════════════════════════════ */
+function exportLog() {
+  if (!state.logs.length) { notify('No data to export', 'error'); return; }
+
+  const SEP  = '\u2550'.repeat(60);
+  const sep2 = '\u2500'.repeat(60);
+  const date = (state.tripStart || new Date()).toLocaleDateString('en-GB', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+
+  const lines = [
+    SEP,
+    '  BLACKBOX TRIP TRACKER \u2014 CHRONOLOGICAL REPORT',
+    SEP,
+    '  DATE       : ' + date,
+    '  STARTED    : ' + (state.tripStart ? state.tripStart.toLocaleTimeString() : 'N/A'),
+    '  DURATION   : ' + document.getElementById('stat-dur').textContent,
+    '  TOTAL DIST : ' + state.totalDist.toFixed(3) + ' km',
+    '  MAX SPEED  : ' + state.maxSpeed.toFixed(1)  + ' km/h',
+    '  AVG SPEED  : ' + (state.speedCount
+        ? (state.speedSum / state.speedCount).toFixed(1) : '0') + ' km/h',
+    '  STOPS      : ' + state.stopCount,
+    '  LOG ENTRIES: ' + state.logs.length,
+    SEP,
+    '',
+    '  CHRONOLOGICAL EVENT LOG',
+    sep2,
+    '',
+  ];
+
+  const typeLabel = {
+    start:  '\u25B6 START ',
+    end:    '\u23F9 END   ',
+    stop:   '\uD83D\uDED1 STOP  ',
+    resume: '\u25B6 RESUME',
+    ping:   '\uD83D\uDCCD PING  ',
+  };
+
+  state.logs.forEach(function(log, i) {
+    const label = typeLabel[log.type] || '   INFO  ';
+    lines.push('  [' + String(i + 1).padStart(4, '0') + '] ' + label + '  ' + log.tsStr);
+    lines.push('         Note     : ' + log.note);
+    if (log.lat !== 0 || log.lng !== 0) {
+      lines.push('         Location : ' + log.lat.toFixed(6) + ', ' + log.lng.toFixed(6));
+      lines.push('         Maps URL : https://maps.google.com/?q='
+               + log.lat.toFixed(6) + ',' + log.lng.toFixed(6));
+    }
+    lines.push('         Speed    : ' + log.speed.toFixed(1) + ' km/h');
+    lines.push('         Odometer : ' + log.dist.toFixed(3)  + ' km');
+    lines.push('');
+  });
+
+  lines.push(SEP);
+  lines.push('  END OF REPORT \u2014 BlackBox Trip Tracker');
+  lines.push('  Generated: ' + new Date().toLocaleString());
+  lines.push(SEP);
+
+  const blob  = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const url   = URL.createObjectURL(blob);
+  const a     = document.createElement('a');
+  const fname = 'trip_'
+              + (state.tripStart || new Date()).toISOString().slice(0, 10)
+              + '_' + Date.now() + '.txt';
+  a.href     = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  notify('\uD83D\uDCC4 Exported: ' + fname, 'ok');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SCREEN WAKE LOCK
+═══════════════════════════════════════════════════════════════════ */
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    state.wakeLock = await navigator.wakeLock.request('screen');
+    document.getElementById('wakelock-badge').classList.add('active');
+    state.wakeLock.addEventListener('release', function() {
+      document.getElementById('wakelock-badge').classList.remove('active');
+    });
+  } catch (e) {
+    console.warn('Wake lock denied:', e.message);
+  }
+}
+
+async function releaseWakeLock() {
+  if (state.wakeLock) {
+    try { await state.wakeLock.release(); } catch(_) {}
+    state.wakeLock = null;
+    document.getElementById('wakelock-badge').classList.remove('active');
+  }
+}
+
+document.addEventListener('visibilitychange', async function() {
+  if (state.tracking && document.visibilityState === 'visible') {
+    await requestWakeLock();
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   WEB AUDIO  —  SPEED-REACTIVE TICKING
+═══════════════════════════════════════════════════════════════════ */
+function initAudio() {
+  if (state.audioCtx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  state.audioCtx = new AC();
+}
+
+function toggleSound() {
+  if (!state.audioCtx) {
+    initAudio();
+    if (!state.audioCtx) { notify('Web Audio not supported', 'error'); return; }
+  }
+  // Resume suspended context (needed on some mobile browsers after init)
+  if (state.audioCtx.state === 'suspended') {
+    state.audioCtx.resume();
+  }
+  state.soundOn = !state.soundOn;
+  const btn = document.getElementById('btn-sound');
+  if (state.soundOn) {
+    btn.textContent = '\uD83D\uDD0A SOUND';
+    btn.classList.add('on');
+    scheduleTick(state.lastSpeed);
+    notify('\uD83D\uDD0A Sound ON', 'ok');
+  } else {
+    btn.textContent = '\uD83D\uDD07 SOUND';
+    btn.classList.remove('on');
+    stopSoundLoop();
+    notify('\uD83D\uDD07 Sound OFF', 'info');
+  }
+}
+
+function updateSoundSpeed(/* speedKmh */) {
+  /* state.lastSpeed is updated in onPosition before this call;
+     the tick loop reads it on its own schedule — nothing to do here. */
+}
+
+function scheduleTick(speedKmh) {
+  if (!state.soundOn || !state.audioCtx) return;
+
+  /* Interval: 2000 ms at 0 km/h → 100 ms at 120+ km/h */
+  const interval = speedKmh <= 0
+    ? 2000
+    : Math.max(100, 2000 - (speedKmh / 120) * 1900);
+
+  /* Frequency: 80 Hz → 800 Hz */
+  const freq = 80 + Math.min(speedKmh, 120) * 6;
+
+  const ctx  = state.audioCtx;
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.003);
+  gain.gain.linearRampToValueAtTime(0,    ctx.currentTime + 0.04);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.05);
+  osc.onended = function() { osc.disconnect(); gain.disconnect(); };
+
+  state.tickTimeout = setTimeout(function() {
+    scheduleTick(state.lastSpeed);
+  }, interval);
+}
+
+function stopSoundLoop() {
+  if (state.tickTimeout) {
+    clearTimeout(state.tickTimeout);
+    state.tickTimeout = null;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+═══════════════════════════════════════════════════════════════════ */
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  switch (e.key) {
+    case ' ': case 'Enter': e.preventDefault(); toggleTracking();  break;
+    case 's': case 'S':     toggleSound();    break;
+    case 'c': case 'C':     centerMap();      break;
+    case 'l': case 'L':     toggleLogDrawer(); break;
+    case 'e': case 'E':     exportLog();      break;
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   BOOT
+═══════════════════════════════════════════════════════════════════ */
+(function boot() {
+  notify('BlackBox ready \u2014 tap START to begin', 'info');
+
+  // Attempt to pre-centre the map on the user's location
+  if ('geolocation' in navigator) {
+    navigator.geolocation.getCurrentPosition(
+      function(pos) {
+        map.setView([pos.coords.latitude, pos.coords.longitude], 14);
+      },
+      function() { /* silently ignore — user hasn't granted yet */ },
+      { timeout: 8000 }
+    );
+  }
+})();
+</script>
+</body>
+</html>
